@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Block Blast</title>
+
+<style>
+body{
+  margin:0;
+  background:#5063a6;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  font-family:Arial;
+  color:white;
+}
+#menu{margin-top:40px;text-align:center}
+button{
+  padding:14px 24px;
+  font-size:26px;
+  border:none;
+  border-radius:30px;
+  margin:15px;
+}
+#top{
+  width:300px;
+  display:none;
+  justify-content:space-between;
+  align-items:center;
+}
+#score{font-size:30px}
+#game{
+  position:relative;
+  width:300px;
+  height:440px;
+}
+#board{
+  position:absolute;
+  top:0;
+  left:0;
+  z-index:1;
+  border-radius:12px;
+}
+#pieces{
+  position:absolute;
+  top:320px;
+  left:0;
+  z-index:2;
+  background:#3d4f8f;
+  border-radius:20px;
+}
+canvas{ touch-action:none; }
+</style>
+</head>
+
+<body>
+
+<div id="menu">
+  <h1>Block Blast</h1>
+  <button onclick="startGame('blast')">Normal Mode</button>
+  <button onclick="startGame('minecraft')">Minecraft Mode</button>
+</div>
+
+<div id="top">
+  <div id="score">0</div>
+  <button onclick="location.reload()">🔄</button>
+</div>
+
+<div id="game">
+  <canvas id="board" width="300" height="300"></canvas>
+  <canvas id="pieces" width="300" height="120"></canvas>
+</div>
+
+<script>
+const board = document.getElementById("board");
+const piecesCanvas = document.getElementById("pieces");
+const ctx = board.getContext("2d");
+const pctx = piecesCanvas.getContext("2d");
+const menu = document.getElementById("menu");
+const topBar = document.getElementById("top");
+const scoreEl = document.getElementById("score");
+
+const GRID=10, CELL=30;
+const colors=["#ff5252","#4caf50","#42a5f5","#ffb300"];
+const shapes=[[[1,1,1]],[[1,1],[1,1]],[[1],[1],[1]],[[1,1,1],[0,1,0]]];
+
+const images={
+  dirt:loadImg("dirt.png"),
+  stone:loadImg("stone.png"),
+  wood:loadImg("wood.png")
+};
+function loadImg(s){let i=new Image();i.src=s;return i;}
+
+let grid=[],pieces=[],dragging=null;
+let offsetX=0,offsetY=0,score=0,mode="blast";
+let dragFromPieces=false;
+
+/* ⭐ إضافات فقط */
+let previewRow=-1, previewCol=-1, previewOk=false;
+
+/* 🔊 صوت */
+const audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+function playSound(freq=400,d=0.08){
+  const o=audioCtx.createOscillator();
+  const g=audioCtx.createGain();
+  o.frequency.value=freq;
+  o.connect(g); g.connect(audioCtx.destination);
+  o.start();
+  g.gain.exponentialRampToValueAtTime(0.0001,audioCtx.currentTime+d);
+  o.stop(audioCtx.currentTime+d);
+}
+
+/* 💥 أنيميشن حذف */
+let flash=0;
+
+function startGame(m){
+  mode=m;
+  menu.style.display="none";
+  topBar.style.display="flex";
+  reset();
+  loop();
+}
+
+function reset(){
+  grid=Array.from({length:GRID},()=>Array(GRID).fill(null));
+  score=0;
+  scoreEl.textContent=score;
+  newPieces();
+}
+
+function newPieces(){
+  pieces=[];
+  for(let i=0;i<3;i++){
+    pieces.push({
+      shape:shapes[Math.floor(Math.random()*shapes.length)],
+      x:30+i*90,y:20,homeX:30+i*90,homeY:20,
+      val:mode==="minecraft"
+        ?Object.keys(images)[Math.floor(Math.random()*3)]
+        :colors[Math.floor(Math.random()*colors.length)]
+    });
+  }
+}
+
+function drawBoard(){
+  ctx.fillStyle="#2e3b6f";
+  ctx.fillRect(0,0,300,300);
+
+  if(flash>0){
+    ctx.fillStyle="rgba(255,255,255,0.25)";
+    ctx.fillRect(0,0,300,300);
+    flash--;
+  }
+
+  for(let r=0;r<GRID;r++)
+    for(let c=0;c<GRID;c++){
+      ctx.strokeStyle="#ffffff22";
+      ctx.strokeRect(c*CELL,r*CELL,CELL,CELL);
+      if(grid[r][c]){
+        if(mode==="minecraft")
+          ctx.drawImage(images[grid[r][c]],c*CELL,r*CELL,CELL,CELL);
+        else{
+          ctx.fillStyle=grid[r][c];
+          ctx.fillRect(c*CELL+2,r*CELL+2,CELL-4,CELL-4);
+        }
+      }
+    }
+
+  if(dragging && previewRow>=0){
+    ctx.fillStyle=previewOk?"rgba(0,255,0,0.3)":"rgba(255,0,0,0.3)";
+    for(let r=0;r<dragging.shape.length;r++)
+      for(let c=0;c<dragging.shape[r].length;c++)
+        if(dragging.shape[r][c])
+          ctx.fillRect((previewCol+c)*CELL,(previewRow+r)*CELL,CELL,CELL);
+  }
+
+  if(dragging){
+    for(let r=0;r<dragging.shape.length;r++)
+      for(let c=0;c<dragging.shape[r].length;c++)
+        if(dragging.shape[r][c]){
+          if(mode==="minecraft")
+            ctx.drawImage(images[dragging.val],
+              dragging.x+c*CELL,dragging.y+r*CELL,CELL,CELL);
+          else{
+            ctx.fillStyle=dragging.val;
+            ctx.fillRect(
+              dragging.x+c*CELL+2,
+              dragging.y+r*CELL+2,
+              CELL-4,CELL-4
+            );
+          }
+        }
+  }
+}
+
+function drawPieces(){
+  pctx.clearRect(0,0,300,120);
+  for(const p of pieces){
+    if(p===dragging) continue;
+    for(let r=0;r<p.shape.length;r++)
+      for(let c=0;c<p.shape[r].length;c++)
+        if(p.shape[r][c]){
+          if(mode==="minecraft")
+            pctx.drawImage(images[p.val],p.x+c*CELL,p.y+r*CELL,CELL,CELL);
+          else{
+            pctx.fillStyle=p.val;
+            pctx.fillRect(p.x+c*CELL+2,p.y+r*CELL+2,CELL-4,CELL-4);
+          }
+        }
+  }
+}
+
+piecesCanvas.addEventListener("touchstart",e=>{
+  const t=e.touches[0],r=piecesCanvas.getBoundingClientRect();
+  const x=t.clientX-r.left,y=t.clientY-r.top;
+  for(const p of pieces){
+    const w=p.shape[0].length*CELL,h=p.shape.length*CELL;
+    if(x>=p.x&&x<=p.x+w&&y>=p.y&&y<=p.y+h){
+      dragging=p;
+      offsetX=x-p.x;
+      offsetY=y-p.y;
+      dragFromPieces=true;
+      break;
+    }
+  }
+});
+
+document.addEventListener("touchmove",e=>{
+  if(!dragging) return;
+  const t=e.touches[0];
+
+  if(dragFromPieces){
+    const rp=piecesCanvas.getBoundingClientRect();
+    const y=t.clientY-rp.top;
+    if(y>=0){
+      dragging.x=t.clientX-rp.left-offsetX;
+      dragging.y=y-offsetY;
+      return;
+    }
+    dragFromPieces=false;
+  }
+
+  const rb=board.getBoundingClientRect();
+  dragging.x=t.clientX-rb.left-offsetX;
+  dragging.y=t.clientY-rb.top-offsetY;
+
+  previewCol=Math.floor(dragging.x/CELL);
+  previewRow=Math.floor(dragging.y/CELL);
+  previewOk=canPlace(dragging,previewRow,previewCol);
+});
+
+document.addEventListener("touchend",()=>{
+  if(!dragging) return;
+
+  if(previewOk){
+    place(dragging,previewRow,previewCol);
+    playSound(500);
+    pieces=pieces.filter(p=>p!==dragging);
+    score+=10;
+    scoreEl.textContent=score;
+    if(!pieces.length) newPieces();
+  }else{
+    dragging.x=dragging.homeX;
+    dragging.y=dragging.homeY;
+  }
+
+  dragging=null;
+  dragFromPieces=false;
+  previewRow=-1;
+});
+
+function canPlace(p,r,c){
+  for(let i=0;i<p.shape.length;i++)
+    for(let j=0;j<p.shape[i].length;j++)
+      if(p.shape[i][j]){
+        if(r+i<0||c+j<0||r+i>=GRID||c+j>=GRID||grid[r+i][c+j])
+          return false;
+      }
+  return true;
+}
+
+function clearLines(){
+  let cleared=0;
+
+  for(let r=0;r<GRID;r++)
+    if(grid[r].every(v=>v)){
+      grid[r].fill(null);
+      cleared++;
+    }
+
+  for(let c=0;c<GRID;c++){
+    let full=true;
+    for(let r=0;r<GRID;r++) if(!grid[r][c]) full=false;
+    if(full){
+      for(let r=0;r<GRID;r++) grid[r][c]=null;
+      cleared++;
+    }
+  }
+
+  if(cleared){
+    flash=6;
+    playSound(200,0.15);
+    score+=cleared*50;
+    scoreEl.textContent=score;
+  }
+}
+
+function place(p,r,c){
+  for(let i=0;i<p.shape.length;i++)
+    for(let j=0;j<p.shape[i].length;j++)
+      if(p.shape[i][j]) grid[r+i][c+j]=p.val;
+
+  clearLines();
+}
+
+function loop(){
+  drawBoard();
+  drawPieces();
+  requestAnimationFrame(loop);
+}
+</script>
+
+</body>
+</html>
